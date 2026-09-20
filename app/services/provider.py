@@ -1,40 +1,30 @@
-import os
-from typing import Dict, Tuple
+"""Accessors for shared outbound connections.
 
+This module is a thin compatibility layer over
+:class:`app.services.connection_manager.ConnectionManager`, which owns the
+full lifecycle (pooling, health checks, idle eviction, graceful shutdown) of
+every HTTP client and Tor controller connection.
+"""
+
+import os
+from typing import Dict
+
+from app.services.connection_manager import get_connection_manager
 from app.services.http_client import HttpxClient
 
 
-_clients: Dict[tuple, HttpxClient] = {}
-
-
-def _proxies_key(proxies: Dict[str, str]) -> Tuple[Tuple[str, str], Tuple[str, str]]:
-    if not proxies:
-        return tuple(), tuple()
-    # Separate http/https for stable key
-    items = sorted((proxies or {}).items())
-    return tuple(items), tuple(items)
+def _http2_enabled() -> bool:
+    # Determine HTTP/2 enablement from env (default on)
+    http2_env = os.environ.get('WHOOGLE_HTTP2', '1').lower()
+    return http2_env in ('1', 'true', 't', 'yes', 'y')
 
 
 def get_http_client(proxies: Dict[str, str]) -> HttpxClient:
-    # Determine HTTP/2 enablement from env (default on)
-    http2_env = os.environ.get('WHOOGLE_HTTP2', '1').lower()
-    http2_enabled = http2_env in ('1', 'true', 't', 'yes', 'y')
-
-    key = (_proxies_key(proxies or {}), http2_enabled)
-    client = _clients.get(key)
-    if client is not None:
-        return client
-    client = HttpxClient(proxies=proxies or None, http2=http2_enabled)
-    _clients[key] = client
-    return client
+    """Return the shared, health-checked HTTP client for ``proxies``."""
+    return get_connection_manager().get_http_client(
+        proxies=proxies or None, http2=_http2_enabled())
 
 
 def close_all_clients() -> None:
-    for client in list(_clients.values()):
-        try:
-            client.close()
-        except Exception:
-            pass
-    _clients.clear()
-
-
+    """Gracefully close every managed connection (HTTP + Tor)."""
+    get_connection_manager().close_all()

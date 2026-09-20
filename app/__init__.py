@@ -19,6 +19,9 @@ import warnings
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+import atexit
+
+from app.services.connection_manager import reset_connection_manager
 from app.services.http_client import HttpxClient
 from app.services.provider import close_all_clients
 from app.version import __version__
@@ -97,6 +100,11 @@ def _teardown_clients(exception):
         close_all_clients()
     except Exception:
         pass
+
+
+# Graceful shutdown of the shared ConnectionManager (reaper thread + all
+# pooled HTTP/Tor connections) when the process exits.
+atexit.register(reset_connection_manager)
 
 # Ensure all necessary directories exist
 if not os.path.exists(app.config['CONFIG_PATH']):

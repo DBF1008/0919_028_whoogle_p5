@@ -1,5 +1,6 @@
 from app.models.config import Config
 from app.utils.misc import read_config_bool
+from app.services.connection_manager import get_connection_manager
 from app.services.provider import get_http_client
 from app.utils.ua_generator import load_ua_pool, get_random_ua, DEFAULT_FALLBACK_UA
 from defusedxml import ElementTree as ET
@@ -35,7 +36,17 @@ class TorError(Exception):
         super().__init__(message)
 
 
-def send_tor_signal(signal: Signal) -> bool:
+TOR_CONTROL_HOST = '127.0.0.1'
+TOR_CONTROL_PORT = 9051
+
+
+def _create_tor_controller() -> Controller:
+    """Build and authenticate a new Tor control connection.
+
+    Used as the factory for the shared connection pool in the
+    ConnectionManager, so Tor controllers are reused (and health-checked)
+    instead of being opened ad-hoc per signal.
+    """
     use_pass = read_config_bool('WHOOGLE_TOR_USE_PASS')
 
     confloc = './misc/tor/control.conf'
@@ -44,25 +55,48 @@ def send_tor_signal(signal: Signal) -> bool:
     if os.path.isfile(temp):
         confloc = temp
 
-    # Attempt to authenticate and send signal.
+    controller = Controller.from_port(
+        address=TOR_CONTROL_HOST, port=TOR_CONTROL_PORT)
     try:
-        with Controller.from_port(port=9051) as c:
-            if use_pass:
-                with open(confloc, "r") as conf:
-                    # Scan for the last line of the file.
-                    for line in conf:
-                        pass
-                    secret = line.strip('\n')
-                authenticate_password(c, password=secret)
-            else:
-                cookie_path = '/var/lib/tor/control_auth_cookie'
-                authenticate_cookie(c, cookie_path=cookie_path)
-            c.signal(signal)
-            os.environ['TOR_AVAILABLE'] = '1'
-            return True
+        if use_pass:
+            with open(confloc, "r") as conf:
+                # Scan for the last line of the file.
+                for line in conf:
+                    pass
+                secret = line.strip('\n')
+            authenticate_password(controller, password=secret)
+        else:
+            cookie_path = '/var/lib/tor/control_auth_cookie'
+            authenticate_cookie(controller, cookie_path=cookie_path)
+    except Exception:
+        try:
+            controller.close()
+        except Exception:
+            pass
+        raise
+    return controller
+
+
+def send_tor_signal(signal: Signal) -> bool:
+    """Send a signal to Tor through the pooled control connection.
+
+    The controller is managed by the ConnectionManager: it is health-checked
+    before reuse, rebuilt when dead, and closed on graceful shutdown.
+    """
+    manager = get_connection_manager()
+    try:
+        controller = manager.get_tor_controller(
+            _create_tor_controller,
+            host=TOR_CONTROL_HOST,
+            port=TOR_CONTROL_PORT)
+        controller.signal(signal)
+        os.environ['TOR_AVAILABLE'] = '1'
+        return True
     except (SocketError, AuthenticationFailure,
             ConnectionRefusedError, ConnectionError):
         # TODO: Handle Tor authentication (password and cookie)
+        manager.evict_tor_controller(host=TOR_CONTROL_HOST,
+                                     port=TOR_CONTROL_PORT)
         os.environ['TOR_AVAILABLE'] = '0'
 
     return False
