@@ -59,7 +59,11 @@ def test_custom_bang(client):
     # Bang at beginning of query
     rv = client.get(f'/{Endpoint.search}?q=!i%20whoogle')
     assert rv._status_code == 302
-    assert rv.headers.get('Location').startswith('search?q=')
+    # Werkzeug >= 2.1 autocorrects relative redirect locations to
+    # absolute URLs; accept both forms.
+    location = rv.headers.get('Location')
+    assert location.startswith('search?q=') or \
+        location.endswith('search?q=whoogle&tbm=isch')
 
 
 def test_config(client):

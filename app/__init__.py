@@ -9,6 +9,7 @@ from bs4 import MarkupResemblesLocatorWarning
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from flask import Flask
+import atexit
 import json
 import logging.config
 import os
@@ -19,7 +20,7 @@ import warnings
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from app.services.http_client import HttpxClient
+from app.services.connection_manager import get_connection_manager
 from app.services.provider import close_all_clients
 from app.version import __version__
 
@@ -89,10 +90,25 @@ app.config['BANG_FILE'] = os.path.join(
 
 # Global services registry (simple DI)
 app.services = {}
+# Unified lifecycle owner for all outbound connections (HTTP pool + Tor)
+app.services['connection_manager'] = get_connection_manager()
 
 
 @app.teardown_appcontext
 def _teardown_clients(exception):
+    # Per-request maintenance: drop dead connections and evict idle ones
+    # instead of tearing down the whole pool after every request.
+    try:
+        manager = app.services['connection_manager']
+        manager.health_check()
+        manager.evict_idle()
+    except Exception:
+        pass
+
+
+@atexit.register
+def _shutdown_connections():
+    # Graceful shutdown of every managed connection on process exit
     try:
         close_all_clients()
     except Exception:

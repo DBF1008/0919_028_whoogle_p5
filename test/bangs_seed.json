@@ -1,0 +1,14 @@
+{
+  "!gh": {
+    "url": "https://github.com/search?q={}",
+    "suggestion": "!gh (GitHub)"
+  },
+  "!w": {
+    "url": "https://en.wikipedia.org/wiki/Special:Search?search={}",
+    "suggestion": "!w (Wikipedia)"
+  },
+  "!r": {
+    "url": "https://www.reddit.com/search?q={}",
+    "suggestion": "!r (Reddit)"
+  }
+}

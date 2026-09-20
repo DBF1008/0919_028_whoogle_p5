@@ -1,5 +1,8 @@
 from app.models.config import Config
-from app.utils.misc import read_config_bool
+from app.services.connection_manager import (
+    ConnectionManager,
+    get_connection_manager,
+)
 from app.services.provider import get_http_client
 from app.utils.ua_generator import load_ua_pool, get_random_ua, DEFAULT_FALLBACK_UA
 from defusedxml import ElementTree as ET
@@ -8,8 +11,6 @@ import urllib.parse as urlparse
 import os
 from stem import Signal, SocketError
 from stem.connection import AuthenticationFailure
-from stem.control import Controller
-from stem.connection import authenticate_cookie, authenticate_password
 
 MAPS_URL = 'https://maps.google.com/maps'
 AUTOCOMPLETE_URL = ('https://suggestqueries.google.com/'
@@ -36,33 +37,24 @@ class TorError(Exception):
 
 
 def send_tor_signal(signal: Signal) -> bool:
-    use_pass = read_config_bool('WHOOGLE_TOR_USE_PASS')
+    """Send a signal through the pooled Tor control connection.
 
-    confloc = './misc/tor/control.conf'
-    # Check that the custom location of conf is real.
-    temp = os.getenv('WHOOGLE_TOR_CONF', '')
-    if os.path.isfile(temp):
-        confloc = temp
+    The Controller is managed by the shared ConnectionManager (same pool
+    as the HTTP clients) instead of being opened ad-hoc per call. On
+    failure the broken controller is evicted so the next call reconnects.
+    """
+    manager = get_connection_manager()
 
-    # Attempt to authenticate and send signal.
+    # Attempt to send the signal via the pooled controller.
     try:
-        with Controller.from_port(port=9051) as c:
-            if use_pass:
-                with open(confloc, "r") as conf:
-                    # Scan for the last line of the file.
-                    for line in conf:
-                        pass
-                    secret = line.strip('\n')
-                authenticate_password(c, password=secret)
-            else:
-                cookie_path = '/var/lib/tor/control_auth_cookie'
-                authenticate_cookie(c, cookie_path=cookie_path)
-            c.signal(signal)
-            os.environ['TOR_AVAILABLE'] = '1'
-            return True
+        controller = manager.get_tor_controller()
+        controller.signal(signal)
+        os.environ['TOR_AVAILABLE'] = '1'
+        return True
     except (SocketError, AuthenticationFailure,
             ConnectionRefusedError, ConnectionError):
         # TODO: Handle Tor authentication (password and cookie)
+        manager.evict(ConnectionManager.TOR_CONTROLLER_KEY)
         os.environ['TOR_AVAILABLE'] = '0'
 
     return False

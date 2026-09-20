@@ -1,3 +1,11 @@
+import os
+
+import test.py314_compat  # noqa: F401  (must be early: py3.12+ shims)
+
+# The test environment may not have the optional h2 package installed;
+# force HTTP/1.1 so pooled HttpxClient instances can be constructed.
+os.environ.setdefault('WHOOGLE_DISABLE_HTTP2', '1')
+
 from app import app
 from app.request import Request
 from app.utils.session import generate_key

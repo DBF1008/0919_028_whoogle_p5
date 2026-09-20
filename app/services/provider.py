@@ -1,40 +1,23 @@
-import os
-from typing import Dict, Tuple
+"""Backwards-compatible facade over the shared ConnectionManager.
 
+This module used to keep a module-level ``_clients`` dict as a global
+connection pool without any lifecycle management. Pooling, health
+checks, idle eviction and graceful shutdown now live in
+app.services.connection_manager; these helpers are kept so existing
+imports (app.request, app/__init__) keep working unchanged.
+"""
+
+from typing import Dict
+
+from app.services.connection_manager import get_connection_manager
 from app.services.http_client import HttpxClient
 
 
-_clients: Dict[tuple, HttpxClient] = {}
-
-
-def _proxies_key(proxies: Dict[str, str]) -> Tuple[Tuple[str, str], Tuple[str, str]]:
-    if not proxies:
-        return tuple(), tuple()
-    # Separate http/https for stable key
-    items = sorted((proxies or {}).items())
-    return tuple(items), tuple(items)
-
-
 def get_http_client(proxies: Dict[str, str]) -> HttpxClient:
-    # Determine HTTP/2 enablement from env (default on)
-    http2_env = os.environ.get('WHOOGLE_HTTP2', '1').lower()
-    http2_enabled = http2_env in ('1', 'true', 't', 'yes', 'y')
-
-    key = (_proxies_key(proxies or {}), http2_enabled)
-    client = _clients.get(key)
-    if client is not None:
-        return client
-    client = HttpxClient(proxies=proxies or None, http2=http2_enabled)
-    _clients[key] = client
-    return client
+    """Return the pooled HttpxClient for the given proxy config."""
+    return get_connection_manager().get_http_client(proxies)
 
 
 def close_all_clients() -> None:
-    for client in list(_clients.values()):
-        try:
-            client.close()
-        except Exception:
-            pass
-    _clients.clear()
-
-
+    """Gracefully close every pooled connection."""
+    get_connection_manager().close_all()
